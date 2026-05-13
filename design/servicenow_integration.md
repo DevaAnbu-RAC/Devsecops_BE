@@ -8,7 +8,17 @@
 - **Story ID:** ZDAD-58  
 - **Story Name:** ServiceNow Integration for Project Ingestion and DevSecOps Ticket Fetching  
 - **Story Description:**  
-  Enable automated data ingestion from ServiceNow into the DevSecOps Jira Dashboard. ServiceNow acts as the source of truth for project onboarding and DevSecOps ticket creation. When a project is created in ServiceNow, a script triggers the Projects Sync API to push project data into the dashboard database. When a DevSecOps ticket is completed in ServiceNow, a script triggers the DevSecOps Tickets Sync API to push ticket and repository data. Both endpoints perform upsert operations, authenticate via the same JWT mechanism used across the application (with an additional `servicenow_sync` role check), and return standardized responses.
+  When a new project is created in ServiceNow, the system needs to automatically receive and ingest the project details so that the DevSecOps Dashboard stays up to date without manual intervention. When viewing project details, the system needs to have the ability to fetch associated DevSecOps ticket information from ServiceNow so that full project context is available in one place.
+- **Context:**  
+  The goal is to integrate the DevSecOps Dashboard with ServiceNow to enable two-way data flow. A webhook endpoint will be configured in ServiceNow. This will trigger the `POST /api/v1/sync/servicenow/projects` endpoint when a new project is created. This ensures real-time ingestion of new projects into the DevSecOps Dashboard without manual data entry. A separate `POST /api/v1/sync/servicenow/devsecops-tickets` endpoint will receive ticket details associated with a project. This allows the dashboard to display full project context, including ticket status, priority, assignment, and resolution details alongside pipeline and adoption data. This integration will eliminate manual data synchronization between ServiceNow and the DevSecOps Dashboard, ensuring project information is accurate and current.
+- **Acceptance Criteria:**
+  - The `POST /api/v1/sync/servicenow/projects` endpoint validates the payload, ensuring required fields exist and data types are correct. It rejects invalid payloads with appropriate error responses.
+  - Duplicate project ingestion is handled gracefully — if a project with the same `sn_project_id` already exists, the record is skipped without creating a duplicate.
+  - The `POST /api/v1/sync/servicenow/devsecops-tickets` endpoint receives DevSecOps ticket data from ServiceNow and inserts ticket details including repositories for the requested project.
+  - Both endpoints handle errors such as ServiceNow unavailability, authentication failures, invalid payloads, and data store errors, returning meaningful messages.
+  - All API endpoints comply with platform standards defined in the SD artifacts, including logging, request and response contracts, and error response structure.
+  - Unit tests cover positive and negative cases for both endpoints; all defects identified during testing are resolved before release.
+  - Code review is completed and the reviewing team confirms readiness for release.
 
 ### <u> Table of Contents </u>
 - [Section 1: Functional Requirements](#Section-1:-Functional-Requirements)
@@ -39,8 +49,7 @@
 ### <u> Section 1: Functional Requirements </u>
 
 #### <u> 1.1 Overview </u>
-
-The ServiceNow Integration story implements two inbound sync endpoints that allow ServiceNow to push project and DevSecOps ticket data into the DevSecOps Jira Dashboard database. ServiceNow is the source of truth for project onboarding — when a new project is created in ServiceNow, a scheduled or event-driven script calls `POST /api/v1/sync/servicenow/projects` to create or update the project record. Similarly, when a DevSecOps ticket is completed in ServiceNow, a script calls `POST /api/v1/sync/servicenow/devsecops-tickets` to sync ticket and associated repository data. Both endpoints authenticate using the same JWT Bearer token mechanism as the rest of the application, with an additional authorization check ensuring the caller has the `servicenow_sync` role. The sync operations are idempotent upserts keyed on `sn_project_id` for projects and the combination of `sn_project_id` + `specialization_name` for tickets. Partial success is supported for batch ticket syncing — valid tickets are processed while failures are logged and reported in the response. All errors encountered during processing are logged to the `error_log` database table for traceability.
+The ServiceNow Integration story implements two inbound sync endpoints that enable two-way data flow between ServiceNow and the DevSecOps Jira Dashboard. A webhook configured in ServiceNow triggers `POST /api/v1/sync/servicenow/projects` when a new project is created, ensuring real-time ingestion without manual data entry. The project sync is insert-only — if a project with the same `sn_project_id` already exists, the record is skipped (no duplicates created). The `POST /api/v1/sync/servicenow/devsecops-tickets` endpoint receives DevSecOps ticket data pushed by ServiceNow when a new ticket is created, inserting ticket and repository records into the database. Both endpoints authenticate by decrypting the token to extract the ServiceNow email ID and validating it against the allowed ServiceNow service account email stored in an environment variable (`SERVICENOW_ALLOWED_EMAIL`), with an additional authorization check ensuring the caller has the `servicenow_sync` role. Partial success is supported for batch ticket syncing — valid tickets are processed while failures are logged. All errors are logged to the `error_log` database table for traceability.
 
 #### <u> 1.2 Requirement Details </u>
 
@@ -53,12 +62,12 @@ The ServiceNow Integration story implements two inbound sync endpoints that allo
 ##### <u> 1.2.1 ZDAD-58-FR01: Project Sync from ServiceNow </u>
 
 ##### Description:
-The system shall expose a `POST /api/v1/sync/servicenow/projects` endpoint that receives project data from ServiceNow and performs an upsert operation in the `projects` table. The `sn_project_id` field serves as the unique identifier to determine whether to insert a new project or update an existing one. This endpoint is triggered by a ServiceNow script when a new project is created or an existing project is modified in ServiceNow.
+The system shall expose a `POST /api/v1/sync/servicenow/projects` endpoint that receives project data from ServiceNow and inserts a new record in the `projects` table. The `sn_project_id` field serves as the unique identifier — if a project with the same `sn_project_id` already exists, the record is skipped (no duplicate created). This endpoint is triggered by a webhook configured in ServiceNow when a new project is created.
 
 ##### Request Payload:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `sn_project_id` | string | Yes | ServiceNow project identifier (unique key for upsert) |
+| sn_project_id | VARCHAR | ServiceNow project identifier (unique key for deduplication) |
 | `project_name` | string | Yes | Name of the project |
 | `onboarded_date` | date (ISO 8601) | Yes | Date when the project was onboarded (format: YYYY-MM-DD) |
 | `project_type` | string | Yes | Type/category of the project (e.g., "Infrastructure") |
@@ -67,11 +76,11 @@ The system shall expose a `POST /api/v1/sync/servicenow/projects` endpoint that 
 | `approver` | string | No | Name or email of the approver for the project |
 
 ##### Processing Logic:
-1. Authenticate the request using JWT Bearer token validation (same middleware as other endpoints).
+1. Authenticate the request by decrypting the token and validating the ServiceNow email against the `SERVICENOW_ALLOWED_EMAIL` environment variable.
 2. Verify the authenticated user has the `servicenow_sync` role — return 401 if not authorized.
 3. Validate the request payload against the Pydantic schema (required fields, data types, date format).
 4. Look up the project by `sn_project_id` in the `projects` table:
-   - **If found** → Update the existing record with the new values (`project_name`, `onboarded_date`, `project_type`, `is_applicable`, `client`, `approver`). Set `modified_at` to current timestamp and `modified_by` to the authenticated service account identifier.
+   - **If found** → Skip the record (project already exists). Return success.
    - **If not found** → Create a new project record with:
      - A generated UUID as `project_id`
      - `status_id` set to the "Inactive" status (looked up from the `statuses` table by name)
@@ -93,14 +102,14 @@ The system shall expose a `POST /api/v1/sync/servicenow/projects` endpoint that 
 | Status Code | Condition |
 |-------------|-----------|
 | 400 | Invalid or missing required fields (e.g., missing `sn_project_id`, invalid date format) |
-| 401 | Missing/invalid JWT token or user does not have `servicenow_sync` role |
+| 401 | Missing/invalid token or user does not have `servicenow_sync` role |
 | 500 | Unexpected server error (logged to `error_log` table) |
 
 ##### Acceptance Criteria:
 - A new project is created in the `projects` table when `sn_project_id` does not exist.
-- An existing project is updated when `sn_project_id` already exists in the `projects` table.
+- If `sn_project_id` already exists, the record is skipped — no duplicate is created.
 - New projects are assigned the "Inactive" status by default (resolved from `statuses` table).
-- The `created_by` and `modified_by` fields reflect the authenticated service account.
+- The `created_by` field reflects the authenticated service account.
 - Invalid payloads return HTTP 400 with a descriptive error message identifying the invalid field.
 - Unauthorized requests (missing token or wrong role) return HTTP 401.
 - The endpoint is idempotent — calling it multiple times with the same data produces the same result.
@@ -108,7 +117,7 @@ The system shall expose a `POST /api/v1/sync/servicenow/projects` endpoint that 
 ##### <u> 1.2.2 ZDAD-58-FR02: DevSecOps Tickets Sync from ServiceNow </u>
 
 ##### Description:
-The system shall expose a `POST /api/v1/sync/servicenow/devsecops-tickets` endpoint that receives a batch of DevSecOps ticket data from ServiceNow and performs upsert operations in the `devsecops_tickets` and `repositories` tables. This endpoint is triggered by a ServiceNow script when a DevSecOps ticket is completed. Each ticket is linked to a project (via `sn_project_id`) and a specialization (via `specialization_name`). The endpoint supports partial success — valid tickets are processed while invalid ones are logged and reported.
+The system shall expose a `POST /api/v1/sync/servicenow/devsecops-tickets` endpoint that receives a batch of DevSecOps ticket data from ServiceNow and performs insert operations in the `devsecops_tickets` and `repositories` tables. This endpoint is triggered by an event-driven script in ServiceNow when a DevSecOps ticket is completed. Each ticket is linked to a project (via `sn_project_id`) and a specialization (via `specialization_name`). The endpoint supports partial success — valid tickets are processed while invalid ones are logged and reported.
 
 ##### Request Payload:
 **Root object:**
@@ -135,18 +144,23 @@ The system shall expose a `POST /api/v1/sync/servicenow/devsecops-tickets` endpo
 | `ado_repo_id` | string | No | Azure DevOps repository identifier |
 
 ##### Processing Logic:
-1. Authenticate the request using JWT Bearer token validation.
+1. Authenticate the request by decrypting the token and validating the ServiceNow email against the `SERVICENOW_ALLOWED_EMAIL` environment variable.
 2. Verify the authenticated user has the `servicenow_sync` role — return 401 if not authorized.
 3. Validate the root payload structure (must contain a non-empty `tickets` array).
 4. For each ticket in the array:
    a. **Resolve `specialization_name`** → Query the `specializations` table for a record where `specialization_name` matches (case-insensitive) and `is_active = 1`. If not found, mark this ticket as failed and continue to the next ticket.
-   b. **Resolve `sn_project_id`** → Query the `projects` table for a record where `sn_project_id` matches and `is_active = 1`. If not found, mark this ticket as failed and continue to the next ticket.
-   c. **Upsert the ticket** → Look up existing ticket by `sn_project_id` + `specialization_id` combination in `devsecops_tickets`:
-      - **If found** → Update the existing record with new values. Set `modified_at` and `modified_by`.
-      - **If not found** → Create a new record with generated UUID as `ticket_id`, resolved `specialization_id`, resolved `project_id`, and `is_active = 1`. Set `created_at` and `created_by`.
+   b. **Resolve project (3-step fallback)**:
+      1. **Match by `sn_project_id`** → Query the `projects` table for a record where `sn_project_id` matches the request's `sn_project_id` and `is_active = 1`. If found, use that project's `project_id` and `sn_project_id`.
+      2. **Match by `project_name`** → If no `sn_project_id` match, query the `projects` table for a record where `project_name` matches the request's `project_name` and `is_active = 1`. If found, use that project's `project_id` and `sn_project_id`.
+      3. **Use default project** → If neither match is found, use the pre-existing default project record in the `projects` table. Map the ticket to the default project's `project_id` and `sn_project_id`.
+   c. **Insert the ticket** → Create a new record in `devsecops_tickets` with:
+      - Generated UUID as `ticket_id`
+      - Resolved `specialization_id` and `project_id`
+      - `is_active = 1`
+      - `created_at` and `created_by` set to current timestamp and service account
    d. **Process repositories** → For each repository in the ticket:
       - Look up by `repo_name` + `ticket_id` in the `repositories` table.
-      - **If found** → Update `ado_repo_id` if provided. Set `modified_at` and `modified_by`.
+      - **If found** → Skip (repository already exists).
       - **If not found** → Create a new repository record with generated UUID, linked to the ticket via `ticket_id`. Set `created_at` and `created_by`.
 5. Return a success response indicating the sync completed. Failed tickets are logged to the application logs with the reason for failure.
 
@@ -163,7 +177,7 @@ The system shall expose a `POST /api/v1/sync/servicenow/devsecops-tickets` endpo
 | Status Code | Condition |
 |-------------|-----------|
 | 400 | Invalid payload structure (missing `tickets` array, empty array, or missing required fields in ticket objects) |
-| 401 | Missing/invalid JWT token or user does not have `servicenow_sync` role |
+| 401 | Missing/invalid token or user does not have `servicenow_sync` role |
 | 500 | Unexpected server error (logged to `error_log` table) |
 
 ##### Partial Success Behavior:
@@ -173,34 +187,35 @@ The system shall expose a `POST /api/v1/sync/servicenow/devsecops-tickets` endpo
 - If ALL tickets in the batch fail, the response still returns HTTP 200 but the failures are logged.
 
 ##### Acceptance Criteria:
-- A new ticket is created in `devsecops_tickets` when the `sn_project_id` + `specialization_id` combination does not exist.
-- An existing ticket is updated when the combination already exists.
-- Repositories are created or updated and linked to the correct ticket via `ticket_id`.
+- A new ticket is always created in `devsecops_tickets` for each incoming ticket in the batch (one project can have multiple tickets).
+- Project resolution follows the 3-step fallback: match by `sn_project_id` → match by `project_name` → use default project.
+- When matched by `project_name`, the existing project's `project_id` and `sn_project_id` are used for the ticket.
+- When no match is found, the ticket is mapped to the pre-existing default project in the database.
+- Repositories are created and linked to the correct ticket via `ticket_id`. Existing repositories are skipped.
 - Unknown `specialization_name` values cause the individual ticket to be skipped (not the entire batch).
-- Unknown `sn_project_id` values cause the individual ticket to be skipped (not the entire batch).
-- The `created_by` and `modified_by` fields reflect the authenticated service account.
+- The `created_by` field reflects the authenticated service account.
 - The endpoint handles empty `repositories` arrays gracefully (ticket is created without repositories).
 - Failed tickets are logged with sufficient detail for debugging.
 
 ##### <u> 1.2.3 ZDAD-58-FR03: ServiceNow Role-Based Authorization </u>
 
 ##### Description:
-The system shall enforce role-based access control on both ServiceNow sync endpoints. After standard JWT token validation (signature, expiration, claims), the system performs an additional authorization check to verify the authenticated user has the `servicenow_sync` role. This ensures only the dedicated ServiceNow service account can invoke the sync endpoints, preventing unauthorized access from other authenticated users.
+The system shall enforce role-based access control on both ServiceNow sync endpoints. After standard encrypted token validation (private key decryption + Jira email validation), the system performs an additional authorization check to verify the authenticated user has the `servicenow_sync` role. This ensures only the dedicated ServiceNow service account can invoke the sync endpoints, preventing unauthorized access from other authenticated users.
 
 ##### Authorization Flow:
-1. The JWT middleware validates the token (same as all other endpoints in the application).
-2. After successful token validation, the sync route handler (or a dedicated dependency) checks the decoded token claims for the `servicenow_sync` role.
-3. The role can be present in a `roles` claim (array) or a `scope` claim (space-separated string) within the JWT payload.
+1. The authentication middleware decrypts the token using the private key and validates the Jira email (same as all other endpoints in the application).
+2. After successful token validation, the sync route handler (or a dedicated dependency) checks the decrypted token payload for the `servicenow_sync` role.
+3. The role can be present in a `roles` field (array) or a `scope` field (space-separated string) within the decrypted token payload.
 4. If the role is not present, the endpoint returns HTTP 401 with the message: "Insufficient permissions: servicenow_sync role required".
 
 ##### Service Account Details:
 - The ServiceNow integration uses a dedicated service account (e.g., `svc_servicenow@zeb.co`).
 - The service account is provisioned with minimal permissions — only the `servicenow_sync` role.
-- The JWT token for this account is issued by the same identity provider used for all dashboard users.
+- The encrypted token for this account is issued by the same identity provider used for all dashboard users.
 
 ##### Acceptance Criteria:
-- Requests with a valid JWT token but without the `servicenow_sync` role receive HTTP 401.
-- Requests with a valid JWT token that includes the `servicenow_sync` role are allowed to proceed.
+- Requests with a valid token but without the `servicenow_sync` role receive HTTP 401.
+- Requests with a valid token that includes the `servicenow_sync` role are allowed to proceed.
 - The role check is applied to both `/api/v1/sync/servicenow/projects` and `/api/v1/sync/servicenow/devsecops-tickets`.
 - The error response clearly indicates the missing role/permission.
 
@@ -275,7 +290,7 @@ The following tables are directly involved in the ServiceNow sync operations (as
 |--------|------|-------------|
 | project_id | UUID | PK |
 | status_id | UUID | FK → statuses.status_id |
-| sn_project_id | VARCHAR | ServiceNow project identifier (unique key for upsert) |
+| sn_project_id | VARCHAR | ServiceNow project identifier (unique key for deduplication) |
 | project_name | VARCHAR | NOT NULL |
 | onboarded_date | DATE | NOT NULL |
 | project_type | VARCHAR | NOT NULL |
@@ -368,10 +383,11 @@ The following tables are directly involved in the ServiceNow sync operations (as
 
 - **Python 3.12+** — Runtime environment
 - **FastAPI** — Web framework for building the REST API
-- **SQLAlchemy** — ORM for PostgreSQL database access (upsert operations, relationship queries)
+- **SQLAlchemy** — ORM for PostgreSQL database access (insert operations, relationship queries)
 - **Pydantic v2** — Request payload validation and serialization
 - **PostgreSQL** — Primary database storing projects, tickets, repositories, specializations, and error logs
-- **python-jose / PyJWT** — JWT token decoding and validation (shared with existing auth middleware)
+- **cryptography / PyCryptodome** — Token decryption using private key (shared with existing auth middleware)
+- **Jira API client (atlassian-python-api or httpx)** — Validates Jira email existence (shared with existing auth middleware)
 - **Uvicorn** — ASGI server for running the FastAPI application
 - **ServiceNow (External)** — Source system that triggers the sync via HTTP POST requests
 
@@ -392,12 +408,12 @@ The ServiceNow Sync endpoints are deployed as part of the same DevSecOps Jira Da
 ##### <u> 2.1.2.1 ZDAD-58-NFR01: Shared Deployment with Existing Application </u>
 
 ##### Description:
-The ServiceNow sync endpoints shall be deployed as additional routes within the existing FastAPI application. No separate service or deployment is required. The sync routes are registered in the application startup alongside the Overview API routes and share the same database connection pool, JWT middleware, and error handling infrastructure.
+The ServiceNow sync endpoints shall be deployed as additional routes within the existing FastAPI application. No separate service or deployment is required. The sync routes are registered in the application startup alongside the Overview API routes and share the same database connection pool, authentication middleware, and error handling infrastructure.
 
 ##### Deployment Configuration:
 - **Route Registration:** Sync routes are added via a dedicated `APIRouter` with prefix `/api/v1/sync/servicenow`.
 - **Database:** Uses the same SQLAlchemy engine and session factory as the Overview API.
-- **Authentication:** Uses the same JWT middleware — no additional auth infrastructure needed.
+- **Authentication:** Uses the same encrypted token middleware — no additional auth infrastructure needed.
 - **Error Handling:** Uses the same global exception handler that logs to `error_log`.
 
 ##### Acceptance Criteria:
@@ -425,8 +441,8 @@ The Azure App Service network configuration shall allow inbound HTTPS traffic fr
 
 #### <u> 2.2.1 Security and Compliance </u>
 
-##### JWT Authentication with Role Check:
-Both sync endpoints require a valid JWT Bearer token in the `Authorization` header. The existing JWT middleware validates the token signature, expiration, and required claims. After standard validation, a dedicated dependency function checks for the `servicenow_sync` role in the token claims. This two-layer approach ensures that even if a valid user token is used, only the ServiceNow service account can invoke the sync endpoints.
+##### Encrypted Token Authentication with Role Check:
+Both sync endpoints require a valid encrypted token in the `Authorization` header. The existing authentication middleware decrypts the token using a private key and validates the Jira email ID against the Jira API. After standard validation, a dedicated dependency function checks for the `servicenow_sync` role in the decrypted token payload. This two-layer approach ensures that even if a valid user token is used, only the ServiceNow service account can invoke the sync endpoints.
 
 ##### Minimal Privilege Principle:
 - The ServiceNow service account is provisioned with only the `servicenow_sync` role.
@@ -439,8 +455,8 @@ Both sync endpoints require a valid JWT Bearer token in the `Authorization` head
 - String fields are validated for maximum length to prevent buffer-related issues.
 
 ##### Audit Trail:
-- All sync requests are logged at INFO level with: caller identity (from JWT claims), timestamp, endpoint called, and a summary of the payload (number of tickets, project ID).
-- Sensitive data (full JWT token) is never logged.
+- All sync requests are logged at INFO level with: caller identity (from decrypted token), timestamp, endpoint called, and a summary of the payload (number of tickets, project ID).
+- Sensitive data (full encrypted token, private key) is never logged.
 - Failed authorization attempts are logged at WARNING level with the caller identity.
 
 #### <u> 2.2.2 System Performance </u>
@@ -474,7 +490,7 @@ Both sync endpoints require a valid JWT Bearer token in the `Authorization` head
 
 ##### Resource Optimization:
 - No additional infrastructure is required — the sync endpoints share the existing App Service and database.
-- Sync operations are lightweight (simple upserts) and do not require additional compute resources.
+- Sync operations are lightweight (simple inserts with duplicate detection) and do not require additional compute resources.
 - Database connection pooling prevents connection exhaustion from frequent sync calls.
 - No caching is needed for sync operations as they are write-heavy and infrequent.
 
@@ -501,12 +517,12 @@ Both sync endpoints require a valid JWT Bearer token in the `Authorization` head
 
 - Implementation of `POST /api/v1/sync/servicenow/projects` endpoint for project data ingestion from ServiceNow
 - Implementation of `POST /api/v1/sync/servicenow/devsecops-tickets` endpoint for ticket and repository data ingestion from ServiceNow
-- JWT Bearer token authentication using the existing middleware (shared with Overview API)
+- Encrypted token authentication using the existing middleware (shared with Overview API)
 - Role-based authorization check for `servicenow_sync` role on both sync endpoints
 - Pydantic v2 request models for payload validation (`SyncProjectRequest`, `SyncDevSecOpsTicketsRequest`)
-- Upsert logic for projects keyed on `sn_project_id`
-- Upsert logic for tickets keyed on `sn_project_id` + `specialization_id` combination
-- Upsert logic for repositories keyed on `repo_name` + `ticket_id` combination
+- Insert logic for projects keyed on `sn_project_id` (duplicates skipped)
+- Insert logic for tickets — each incoming ticket is always created (one project can have multiple tickets)
+- Insert logic for repositories keyed on `repo_name` + `ticket_id` combination (existing records skipped)
 - Resolution of `specialization_name` to `specialization_id` from the `specializations` table
 - Resolution of `sn_project_id` to `project_id` from the `projects` table
 - Default status assignment ("Inactive") for newly created projects

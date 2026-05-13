@@ -104,7 +104,7 @@ The system shall expose a `POST /api/v1/reports/generate` endpoint that triggers
 - Missing recipients return HTTP 400 with a clear message.
 - Successful execution returns HTTP 200 and creates an `email_history` record with status "sent".
 - Failed execution logs the error and creates an `email_history` record with status "failed".
-- The endpoint requires JWT Bearer token authentication.
+- The endpoint requires encrypted token authentication (shared middleware).
 
 ##### <u> 1.2.2 ZDAD-60-FR02: Cron Job Frequency Evaluation </u>
 
@@ -449,7 +449,8 @@ The following tables are directly involved in the Email Notification Service (as
 - **boto3** — AWS SDK for S3 upload and SES email delivery (when using AWS)
 - **azure-storage-blob** — Azure Blob Storage SDK for PDF upload (when using Azure)
 - **msal / microsoft-graph-core** — Microsoft Graph API client for email delivery (when using Graph API)
-- **python-jose / PyJWT** — JWT token decoding and validation (shared with existing auth middleware)
+- **cryptography / PyCryptodome** — Token decryption using private key (shared with existing auth middleware)
+- **Jira API client (atlassian-python-api or httpx)** — Validates Jira email existence (shared with existing auth middleware)
 - **Uvicorn** — ASGI server for running the FastAPI application
 
 
@@ -459,7 +460,7 @@ The following tables are directly involved in the Email Notification Service (as
 
 #### <u> 2.1.1 Overview </u>
 
-The Email Notification Service is deployed as part of the existing DevSecOps Jira Dashboard backend application on Azure App Service. No separate service or infrastructure is required — the report generation route is registered within the existing FastAPI application alongside the Overview API and ServiceNow Sync routes. The service connects to the same PostgreSQL database instance and shares the same JWT middleware, error handling, and logging infrastructure. The external cron trigger (Azure Function Timer Trigger or AWS EventBridge) invokes the API endpoint on a daily schedule. Cloud storage credentials (S3 or Azure Blob) and email service credentials (Graph API or SES) are managed through Azure App Service application settings as environment variables.
+The Email Notification Service is deployed as part of the existing DevSecOps Jira Dashboard backend application on Azure App Service. No separate service or infrastructure is required — the report generation route is registered within the existing FastAPI application alongside the Overview API and ServiceNow Sync routes. The service connects to the same PostgreSQL database instance and shares the same authentication middleware, error handling, and logging infrastructure. The external cron trigger (Azure Function Timer Trigger or AWS EventBridge) invokes the API endpoint on a daily schedule. Cloud storage credentials (S3 or Azure Blob) and email service credentials (Graph API or SES) are managed through Azure App Service application settings as environment variables.
 
 #### <u> 2.1.2 Requirement Details </u>
 
@@ -470,12 +471,12 @@ The Email Notification Service is deployed as part of the existing DevSecOps Jir
 ##### <u> 2.1.2.1 ZDAD-60-NFR01: Shared Deployment with Existing Application </u>
 
 ##### Description:
-The Email Notification Service endpoints shall be deployed as additional routes within the existing FastAPI application. No separate service or deployment is required. The report generation route is registered via a dedicated `APIRouter` with prefix `/api/v1/reports` and shares the same database connection pool, JWT middleware, and error handling infrastructure established in ZDAD-34.
+The Email Notification Service endpoints shall be deployed as additional routes within the existing FastAPI application. No separate service or deployment is required. The report generation route is registered via a dedicated `APIRouter` with prefix `/api/v1/reports` and shares the same database connection pool, authentication middleware, and error handling infrastructure established in ZDAD-34.
 
 ##### Deployment Configuration:
 - **Route Registration:** Report routes are added via `APIRouter` with prefix `/api/v1/reports`.
 - **Database:** Uses the same SQLAlchemy engine and session factory.
-- **Authentication:** Uses the same JWT middleware.
+- **Authentication:** Uses the same encrypted token middleware.
 - **Error Handling:** Uses the same global exception handler that logs to `error_log`.
 
 ##### Acceptance Criteria:
@@ -525,7 +526,7 @@ The report generation is triggered by an external scheduler (Azure Function Time
 ##### Acceptance Criteria:
 - The external cron trigger is documented with the expected schedule and invocation pattern.
 - The API endpoint handles being called daily without sending duplicate reports (frequency evaluation).
-- The trigger uses a service account JWT token for authentication.
+- The trigger uses a service account encrypted token for authentication.
 
 #### <u> 2.1.3 Project Artifacts </u>
 
@@ -536,8 +537,8 @@ The report generation is triggered by an external scheduler (Azure Function Time
 
 #### <u> 2.2.1 Security and Compliance </u>
 
-##### JWT Authentication:
-The report generation endpoint requires a valid JWT Bearer token in the `Authorization` header. The existing JWT middleware validates the token signature, expiration, and required claims. No additional role check is required — any authenticated user (including the cron service account) can trigger report generation.
+##### Encrypted Token Authentication:
+The report generation endpoint requires a valid encrypted token in the `Authorization` header. The existing authentication middleware decrypts the token using a private key and validates the Jira email ID against the Jira API. No additional role check is required — any authenticated user (including the cron service account) can trigger report generation.
 
 ##### Credential Management:
 - Cloud storage credentials (AWS keys, Azure connection strings) are stored exclusively in environment variables.
@@ -624,7 +625,7 @@ The report generation endpoint requires a valid JWT Bearer token in the `Authori
 - Email history tracking in `email_history` table (status, URL, frequency, timestamp)
 - Cron job status tracking in `cron_jobs` table (pending → success/fail)
 - Error logging to `error_log` table for all unhandled exceptions
-- JWT Bearer token authentication (shared middleware)
+- Encrypted token authentication (shared middleware)
 - Pydantic v2 request validation for the report generation payload
 - SQLAlchemy ORM models for `email_templates`, `email_recipient`, `email_history`, `settings`, `cron_jobs`, `kpi_history`, and `projects` tables
 - Environment variable-based configuration for email provider, storage provider, and credentials

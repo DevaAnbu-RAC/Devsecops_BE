@@ -1,123 +1,89 @@
 sequenceDiagram
-    autonumber
-    title ZDAD-60: Email Notification Service Flow
+    title ZDAD-60: Email Notification Service
 
     participant Cron as External Cron Trigger
-    participant API as POST /api/v1/reports/generate
-    participant Auth as JWT Middleware
-    participant Service as Report Service
-    participant DB as PostgreSQL Database
-    participant BS as BeautifulSoup
-    participant PDF as WeasyPrint
-    participant Storage as Cloud Storage (S3/Blob)
-    participant Email as Email Provider (Graph/SES)
+    participant Backend as Backend<br/>(src/routes/report_route.py)
+    participant Database
+    participant Storage as Cloud Storage<br/>(S3 / Azure Blob)
+    participant Email as Email Provider<br/>(Graph API / SES)
 
     %% Trigger and Authentication
-    Cron->>API: POST /api/v1/reports/generate<br/>{type, specialization_id}
-    API->>Auth: Validate JWT Bearer Token
-    Auth-->>API: Token Valid
+    Cron->>Backend: POST /api/v1/reports/generate<br/>{type, specialization_id}
+    Backend->>Backend: Decrypt token using private key
+    Backend->>Backend: Validate Jira email from token
+    Backend->>Backend: Validate request payload
 
-    %% Request Validation
-    API->>Service: Validate request payload
-    Service->>DB: Verify specialization exists & is_active=1
-    DB-->>Service: Specialization found
+    Backend->>Database: Verify specialization exists<br/>WHERE specialization_id AND is_active = 1
+    Database-->>Backend: Specialization found
 
-    %% Cron Job Tracking - Start
-    Service->>DB: INSERT cron_jobs (type="email", sync_status="pending")
-    DB-->>Service: cron_id created
+    %% Cron Job Tracking
+    Backend->>Database: INSERT INTO cron_jobs<br/>(type="email", sync_status="pending")
+    Database-->>Backend: cron_id created
 
     %% Frequency Evaluation
-    rect rgb(240, 248, 255)
-        Note over Service,DB: Frequency Evaluation (FR02)
-        Service->>DB: SELECT settings WHERE specialization_id matches
-        DB-->>Service: {email_digest, at_risk_alert, setting_id}
-        Service->>DB: SELECT email_history WHERE setting_id<br/>AND email_type AND email_status="sent"<br/>ORDER BY last_synced DESC LIMIT 1
-        DB-->>Service: Last sent timestamp (or null)
-        Service->>Service: Evaluate frequency window<br/>(daily=24h, weekly=7d, monthly=30d)
-    end
+    Backend->>Database: SELECT settings<br/>WHERE specialization_id matches
+    Database-->>Backend: {email_digest, at_risk_alert, setting_id}
+    Backend->>Database: SELECT email_history<br/>WHERE setting_id AND email_type<br/>AND email_status="sent"<br/>ORDER BY last_synced DESC LIMIT 1
+    Database-->>Backend: Last sent timestamp (or null)
+    Backend->>Backend: Evaluate frequency window<br/>(daily=24h, weekly=7d, monthly=30d)
 
-    alt Report already sent within frequency window
-        Service-->>API: Skip - already sent (log DEBUG)
-        API-->>Cron: 200 OK (no action needed)
-    else Report is due OR no history exists
-        %% Fetch Template
-        rect rgb(255, 248, 240)
-            Note over Service,DB: Template & Data Retrieval (FR03)
-            Service->>DB: SELECT email_templates<br/>WHERE template_name = report_type
-            DB-->>Service: template_content (HTML string)
+    alt Report already sent within window
+        Backend->>Backend: Skip - log DEBUG
+        Backend-->>Cron: 200 OK (no action needed)
+    else Report is due
+        %% Fetch Template and Data
+        Backend->>Database: SELECT template_content FROM email_templates<br/>WHERE template_name = report_type
+        Database-->>Backend: HTML template string
 
-            alt Report Type = "Summary report"
-                Service->>DB: SELECT kpi_history<br/>WHERE specialization_id matches
-                DB-->>Service: KPI metrics data
-            else Report Type = "At-risk"
-                Service->>DB: SELECT projects<br/>WHERE status = "At Risk"<br/>AND linked to specialization
-                DB-->>Service: At-risk project list
-            end
+        alt Summary report
+            Backend->>Database: SELECT kpi_history<br/>WHERE specialization_id matches
+            Database-->>Backend: KPI metrics data
+        else At-risk report
+            Backend->>Database: SELECT projects WHERE status = At Risk<br/>AND linked to specialization
+            Database-->>Backend: At-risk project list
         end
 
         %% Fetch Recipients
-        Service->>DB: SELECT email_recipient<br/>WHERE specialization_id AND is_active=1
-        DB-->>Service: Recipient email list
+        Backend->>Database: SELECT alert_recipient FROM email_recipient<br/>WHERE specialization_id AND is_active = 1
+        Database-->>Backend: Recipient email list
 
-        alt No active recipients found
-            Service->>DB: UPDATE cron_jobs SET sync_status="fail"
-            Service-->>API: 400 - No active recipients configured
-            API-->>Cron: 400 Error
+        alt No active recipients
+            Backend->>Database: UPDATE cron_jobs SET sync_status="fail"
+            Backend-->>Cron: 400 - No active recipients configured
         else Recipients found
-            %% HTML Processing & PDF Generation
-            rect rgb(240, 255, 240)
-                Note over Service,PDF: PDF Generation (FR03)
-                Service->>BS: Parse template_content (HTML)
-                BS-->>Service: Parsed HTML DOM
-                Service->>BS: Inject report data into placeholders
-                BS-->>Service: Populated HTML string
-                Service->>PDF: Convert HTML to PDF (in-memory)
-                PDF-->>Service: PDF bytes
-            end
+            %% PDF Generation
+            Backend->>Backend: Parse HTML with BeautifulSoup<br/>Inject report data into placeholders
+            Backend->>Backend: Convert HTML to PDF with WeasyPrint<br/>(in-memory, no temp files)
 
-            %% Cloud Storage Upload
-            rect rgb(255, 240, 255)
-                Note over Service,Storage: Cloud Upload (FR04)
-                Service->>Storage: Upload PDF bytes<br/>Path: reports/{spec}/{type}/{YYYY}/{MM}/{filename}.pdf
-                Storage-->>Service: Pre-signed/SAS download URL
-            end
+            %% Upload to Storage
+            Backend->>Storage: Upload PDF bytes<br/>Path: reports/{spec}/{type}/{date}.pdf
+            Storage-->>Backend: Pre-signed download URL
 
-            %% Email Delivery
-            rect rgb(255, 255, 240)
-                Note over Service,Email: Email Delivery (FR05)
-                loop For each active recipient
-                    Service->>Email: Send email with report link<br/>To: recipient, Subject: [DevSecOps Dashboard] Report
-                    alt Send successful
-                        Email-->>Service: 200 OK
-                    else Send failed
-                        Email-->>Service: Error
-                        Service->>Service: Log WARNING (skip & continue)
-                    end
+            %% Send Emails
+            loop For each recipient
+                Backend->>Email: Send email with report link
+                alt Success
+                    Email-->>Backend: 200 OK
+                else Failed
+                    Email-->>Backend: Error
+                    Backend->>Backend: Log WARNING, continue to next
                 end
             end
 
-            %% Email History Tracking
-            rect rgb(248, 248, 248)
-                Note over Service,DB: History & Status Update (FR06, FR07)
-                alt At least one email sent
-                    Service->>DB: INSERT email_history<br/>(email_status="sent", report_url, email_type)
-                else All emails failed
-                    Service->>DB: INSERT email_history<br/>(email_status="failed", email_type)
-                end
-                Service->>DB: UPDATE cron_jobs SET sync_status="success"
+            %% Track History
+            alt At least one email sent
+                Backend->>Database: INSERT INTO email_history<br/>(email_status="sent", report_url, email_type)
+            else All failed
+                Backend->>Database: INSERT INTO email_history<br/>(email_status="failed", email_type)
             end
 
-            Service-->>API: 200 - Email sent successfully
-            API-->>Cron: 200 OK
+            Backend->>Database: UPDATE cron_jobs SET sync_status="success"
+            Backend-->>Cron: 200 - Email sent successfully
         end
     end
 
-    %% Error Handling
-    rect rgb(255, 235, 235)
-        Note over Service,DB: Error Handling (FR08)
-        Note right of Service: On unhandled exception at any step:
-        Service->>DB: INSERT error_log<br/>(error_message, error_function,<br/>error_file, stack_trace)
-        Service->>DB: UPDATE cron_jobs SET sync_status="fail"
-        Service-->>API: 500 - Internal Server Error
-        API-->>Cron: 500 Error
-    end
+    %% Error Scenario
+    Note over Backend,Database: On unhandled exception
+    Backend->>Database: INSERT INTO error_log<br/>(error_message, error_function, stack_trace)
+    Backend->>Database: UPDATE cron_jobs SET sync_status="fail"
+    Backend-->>Cron: 500 - Internal Server Error

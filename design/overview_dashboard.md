@@ -49,7 +49,7 @@
 
 #### <u> 1.1 Overview </u>
 
-The Overview Dashboard API is the primary data source for the DevSecOps Jira Dashboard landing page. It provides delivery leads and stakeholders with a consolidated view of project health across the organization, enabling them to quickly assess portfolio status and take timely action on at-risk projects. The API exposes two endpoints: `GET /api/v1/overview` which returns KPI tiles (Total Projects, Adopted, Adoption Rate, At Risk, Active, Inactive), status distribution data, an attention banner with critical alerts, and the most overdue projects list — all in a single response. The `GET /api/v1/specializations` endpoint provides specialization dropdown values for filtering the overview data. Both endpoints require JWT Bearer token authentication and return standardized JSON responses. The KPI data is pre-computed and stored in the `kpi_history` table (populated by the ADO Sync API), ensuring the Overview API performs efficient read operations without complex on-the-fly calculations. All errors encountered during request processing are logged to the `error_log` database table for traceability and debugging purposes.
+The Overview Dashboard API is the primary data source for the DevSecOps Jira Dashboard landing page. It provides delivery leads and stakeholders with a consolidated view of project health across the organization, enabling them to quickly assess portfolio status and take timely action on at-risk projects. The API exposes two endpoints: `GET /api/v1/overview` which returns KPI tiles (Total Projects, Adopted, Adoption Rate, At Risk, Active, Inactive), status distribution data, an attention banner with critical alerts, and the most overdue projects list — all in a single response. The `GET /api/v1/specializations` endpoint provides specialization dropdown values for filtering the overview data. Both endpoints require encrypted token authentication (with Jira email validation) and return standardized JSON responses. The KPI data is pre-computed and stored in the `kpi_history` table (populated by the ADO Sync API), ensuring the Overview API performs efficient read operations without complex on-the-fly calculations. All errors encountered during request processing are logged to the `error_log` database table for traceability and debugging purposes.
 
 #### <u> 1.2 Requirement Details </u>
 
@@ -77,10 +77,10 @@ The system shall expose a `GET /api/v1/overview` endpoint that returns KPI tiles
 
 ##### Response Structure - KPI Tiles:
 The response `data.metrics` object contains six KPI tiles:
-- `totalProjects` — Total number of onboarded projects with `count`, `trend` (increase/decrease/flat/null), `change` (numeric difference from previous period), and `source` (contextual label e.g., "ServiceNow").
+- `totalProjects` — Total number of onboarded projects. Calculated as: count of unique `sn_project_id` values in the `projects` table (excluding the default project) + count of unique `project_name` values in `devsecops_tickets` that are mapped to the default project. Includes `count`, `trend` (increase/decrease/flat/null), `change` (numeric difference from previous period), and `source` (contextual label e.g., "ServiceNow").
 - `adopted` — Projects that have completed DevSecOps adoption (fully onboarded) with `count`, `description` ("fully onboarded"), `trend`, and `change`.
 - `adoptionRate` — Percentage of projects that have been adopted with `rate` (float percentage), `trend`, and `change`.
-- `atRisk` — Projects with overdue onboarding exceeding the configured threshold with `count`, `description` ("overdue onboarding"), `trend`, and `change`.
+- `atRisk` — Projects where `current_date - onboarded_date` exceeds the `at_risk_threshold` (configured per specialization in the `settings` table) and are not yet completed. Includes `count`, `description` ("overdue onboarding"), `trend`, and `change`.
 - `active` — Projects with pipeline activity within the last 10 days with `count`, `description` ("pipeline run ≤ 10d"), `trend`, and `change`.
 - `inactive` — Projects with no pipeline activity for 10+ days with `count`, `description` ("no activity 10+ d"), `trend`, and `change`.
 
@@ -106,10 +106,14 @@ The response `data.mostOverdueProjects` is an array of the top overdue projects 
 - `specialization` — Specialization name the project belongs to.
 
 ##### Data Source:
-- KPI metrics are read from the `kpi_history` table joined with `specializations` table for filtering.
+- **Total Projects** is calculated as:
+  - Count of unique `sn_project_id` values in the `projects` table (where `sn_project_id` is not the default project).
+  - PLUS: For tickets mapped to the default project, each unique `project_name` in `devsecops_tickets` is counted as a separate project.
+- **At Risk** is calculated by comparing each project's `onboarded_date` against the `at_risk_threshold` (in days) from the `settings` table. If `current_date - onboarded_date > at_risk_threshold` and the project is not yet completed, it is considered at risk.
+- Other KPI metrics (Adopted, Active, Inactive) are read from the `kpi_history` table joined with `specializations` table for filtering.
 - Status distribution is computed from the `projects` table joined with `statuses` table.
-- Attention banner is derived from the at-risk and overdue project counts.
-- Most overdue projects are queried from `projects` table where status is "At Risk", ordered by overdue duration descending, limited to 5.
+- Attention banner is derived from the at-risk count (based on threshold calculation).
+- Most overdue projects are queried from projects where days since onboarding exceeds the threshold, ordered by overdue duration descending, limited to 5.
 - The `kpi_history` table is populated and maintained by the ADO Sync API (out of scope for this story).
 
 ##### Acceptance Criteria:
@@ -142,7 +146,7 @@ The response `data` object contains:
 - Each specialization object contains `id` and `name` fields.
 - Only active records (`is_active = 1`) are returned.
 - Response follows the standardized `BaseResponse` schema.
-- The endpoint requires JWT Bearer token authentication.
+- The endpoint requires encrypted token authentication with Jira email validation.
 - The response is cacheable with a TTL of 1 hour.
 
 
@@ -152,8 +156,8 @@ The response `data` object contains:
 The system shall compute and return an attention banner summarizing critical project health alerts, along with a list of the most overdue projects. The attention banner provides delivery leads with an immediate visual indicator of portfolio risk, while the overdue projects list enables targeted action on the highest-priority items.
 
 ##### Attention Banner Logic:
-1. Count projects with "At Risk" status linked to the requested specialization(s).
-2. Count projects where `onboarded_date` + `at_risk_threshold` (from `settings` table) < current date.
+1. For each project linked to the requested specialization(s), calculate whether `current_date - onboarded_date > at_risk_threshold` (from `settings` table for that specialization).
+2. Count projects that exceed the threshold and are not yet completed — these are "At Risk".
 3. Determine severity:
    - `critical` — More than 5 at-risk projects.
    - `warning` — 1 to 5 at-risk projects.
@@ -161,9 +165,9 @@ The system shall compute and return an attention banner summarizing critical pro
 4. Compose the banner message dynamically (e.g., "{count} projects are at risk and require immediate attention").
 
 ##### Most Overdue Projects Logic:
-1. Query `projects` table joined with `statuses` where `status_name = 'At Risk'` and `is_active = 1`.
+1. Query projects where `current_date - onboarded_date > at_risk_threshold` and project is not completed and `is_active = 1`.
 2. Filter by specialization if the query parameter is provided (via `devsecops_tickets` → `specialization_id`).
-3. Calculate `daysOverdue` as the difference between the current date and the expected completion date (derived from `onboarded_date` + threshold).
+3. Calculate `daysOverdue` as `(current_date - onboarded_date) - at_risk_threshold`.
 4. Order by `daysOverdue` descending.
 5. Limit results to 5.
 
@@ -360,7 +364,8 @@ The following tables are directly involved in the Overview Dashboard API (as def
 - **SQLAlchemy** — ORM for PostgreSQL database access
 - **Pydantic v2** — Request/response model validation and serialization
 - **PostgreSQL** — Primary database storing projects, KPI history, specializations, and error logs
-- **python-jose / PyJWT** — JWT token decoding and validation
+- **cryptography / PyCryptodome** — Token decryption using private key
+- **Jira API client (atlassian-python-api or httpx)** — Validates Jira email existence
 - **Uvicorn** — ASGI server for running the FastAPI application
 - **ADO Sync API** — External dependency that populates the `kpi_history` table (out of scope)
 
@@ -399,14 +404,15 @@ The application shall be deployed to Azure App Service as a containerized Python
 ##### <u> 2.1.2.2 ZDAD-34-NFR02: Environment Configuration </u>
 
 ##### Description:
-All application configuration shall be managed through environment variables. Sensitive values such as database connection strings and JWT secrets are stored in Azure App Service application settings. A `.env.sample` file documents all required environment variables for local development.
+All application configuration shall be managed through environment variables. Sensitive values such as database connection strings and the private key for token decryption are stored in Azure App Service application settings. A `.env.sample` file documents all required environment variables for local development.
 
 ##### Required Environment Variables:
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `DATABASE_URL` | PostgreSQL connection string | Yes |
-| `JWT_SECRET_KEY` | Secret key for JWT token validation | Yes |
-| `JWT_ALGORITHM` | Algorithm used for JWT (default: HS256) | No |
+| `TOKEN_PRIVATE_KEY` | Private key for token decryption (PEM format or path) | Yes |
+| `JIRA_BASE_URL` | Jira instance base URL for email validation | Yes |
+| `JIRA_API_TOKEN` | Jira API token for user lookup requests | Yes |
 | `APP_ENV` | Environment identifier (development, staging, production) | Yes |
 | `LOG_LEVEL` | Application log level (default: INFO) | No |
 | `PORT` | Application port (default: 8080) | No |
@@ -436,16 +442,19 @@ The application shall expose a `/health` endpoint for Azure App Service liveness
 
 #### <u> 2.2.1 Security and Compliance </u>
 
-##### JWT Authentication:
-All API endpoints (except `/health` and `/ready`) require a valid JWT Bearer token in the `Authorization` header. The middleware validates the token signature, expiration, and required claims before allowing the request to proceed to the route handler. Invalid or expired tokens result in an HTTP 401 Unauthorized response.
+##### Token-Based Authentication with Jira Email Validation:
+All API endpoints (except `/health` and `/ready`) require a valid encrypted token in the `Authorization` header. The authentication middleware decrypts the token using a private key to extract the Jira email ID, then validates that the email exists in Jira. Invalid or unrecognized tokens result in an HTTP 401 Unauthorized response.
 
 ##### Token Validation Flow:
 1. Extract the `Authorization` header from the incoming request.
-2. Verify the header contains a `Bearer` prefix followed by the token.
-3. Decode and validate the JWT token using the configured secret key and algorithm.
-4. Check token expiration (`exp` claim) — reject if expired.
-5. Attach decoded token claims to the request context for downstream use.
-6. If validation fails at any step, return HTTP 401 with standardized error response.
+2. Verify the header contains a `Bearer` prefix followed by the encrypted token.
+3. Decrypt the token using the configured private key to extract the payload (contains the Jira email ID).
+4. If decryption fails (invalid token, corrupted data, wrong key), return HTTP 401.
+5. Extract the Jira email ID from the decrypted payload.
+6. Validate the Jira email ID by calling the Jira API to confirm the user exists and is active.
+7. If the Jira email is not found or the user is inactive in Jira, return HTTP 401 with message: "User not found in Jira".
+8. Attach the validated user context (email, display name) to the request for downstream use.
+9. If validation fails at any step, return HTTP 401 with standardized error response.
 
 ##### Input Validation:
 - All query parameters are validated using Pydantic models with strict enum constraints.
@@ -498,7 +507,7 @@ All API endpoints (except `/health` and `/ready`) require a valid JWT Bearer tok
 ##### Request Logging:
 - Incoming requests are logged at INFO level with method, path, and query parameters.
 - Response status codes and latency are logged for monitoring purposes.
-- Sensitive data (JWT tokens, credentials) is never included in log output.
+- Sensitive data (tokens, private keys, credentials) is never included in log output.
 
 
 
@@ -508,7 +517,7 @@ All API endpoints (except `/health` and `/ready`) require a valid JWT Bearer tok
 
 - Implementation of `GET /api/v1/overview` endpoint returning KPI tiles (Total Projects, Adopted, Adoption Rate, At Risk, Active, Inactive), status distribution, attention banner, and most overdue projects list in one response
 - Implementation of `GET /api/v1/specializations` endpoint returning specialization values for the dropdown filter
-- JWT Bearer token authentication middleware for both endpoints
+- Encrypted token authentication middleware with Jira email validation for both endpoints
 - Query parameter validation for `period` (enum) and `specialization` (CSV) filters
 - Reading pre-computed KPI data from the `kpi_history` table
 - Computing status distribution from the `projects` and `statuses` tables
@@ -538,7 +547,7 @@ All API endpoints (except `/health` and `/ready`) require a valid JWT Bearer tok
 - Database schema creation and migrations (assumed pre-existing)
 - Caching layer implementation (Redis or in-memory)
 - Rate limiting and throttling
-- Role-based access control (RBAC) beyond JWT authentication
+- Role-based access control (RBAC) beyond token authentication
 - Email notifications and alert system
 - Settings management endpoints
 - Client and status filter endpoints (consolidated into specializations only for this story)
