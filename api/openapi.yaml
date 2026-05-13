@@ -1605,16 +1605,22 @@ components:
           type: integer
           example: 10
         email_digest:
-          type: boolean
-          example: true
+          type: string
+          description: Email digest schedule value
+          example: "weekly"
         at_risk_alert:
-          type: boolean
-          example: true
+          type: string
+          description: At-risk alert schedule value
+          example: "daily"
         report_frequency:
           type: string
           enum: [daily, weekly, monthly]
           description: Display name of the report frequency
           example: "weekly"
+        last_synced:
+          type: string
+          description: Timestamp of the last sync operation
+          example: "2026-05-10T14:30:00Z"
         email_recipients:
           type: array
           items:
@@ -1647,15 +1653,15 @@ components:
           description: Days since onboarding without repo before project is at-risk
           example: 10
         email_digest:
-          type: boolean
+          type: string
           nullable: true
-          description: Enable/disable email digest reports
-          example: true
+          description: Email digest schedule value
+          example: "weekly"
         at_risk_alert:
-          type: boolean
+          type: string
           nullable: true
-          description: Enable/disable at-risk project alerts
-          example: true
+          description: At-risk alert schedule value
+          example: "daily"
         report_frequency:
           type: string
           enum: [daily, weekly, monthly]
