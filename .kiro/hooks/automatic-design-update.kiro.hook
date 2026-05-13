@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "Automatic Design Update",
+  "description": "Automatically monitors file changes and triggers an agent review to identify any deviations between the code and its design documentation. When a discrepancy is detected, the agent proposes updates to the corresponding design documents to ensure they accurately reflect the current state of the implementation, requiring user approval before any changes are applied.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "**/*"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Analyze the files that have just been updated or edited. Determine if these changes are related to any existing SD (Solution Design) document in the design/ folders. If the code changes are NOT related to any SD document, close this hook without taking any action. If the changes ARE related to a specific SD and reflect a deviation from that SD's documented design, identify the corresponding design document and ask the user for approval before updating it. Only update the SD when there is a clear relationship between the code changes and that specific SD's scope."
+  }
+}

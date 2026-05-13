@@ -75,97 +75,20 @@ paths:
               schema:
                 $ref: '#/components/schemas/CommonServerError'
 
-  /api/v1/specializations:
+  /api/v1/filters:
     get:
       tags:
         - Filters
-      summary: Get specialization filter options
-      description: Returns the list of specializations for the filter dropdown. Cacheable with TTL of 1 hour.
+      summary: Get all filter options
+      description: Returns all filter dropdown options (specializations, clients, statuses) in a single response. Cacheable with TTL of 1 hour.
+      operationId: getFilters
       responses:
         '200':
-          description: Specializations retrieved successfully
+          description: Filter options retrieved successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SpecializationsSuccessResponse'
-        '401':
-          description: Unauthorized - missing or invalid token
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UnauthorizedError'
-        '500':
-          description: Server error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CommonServerError'
-
-  /api/v1/clients:
-    get:
-      tags:
-        - Filters
-      summary: Get clients filter options
-      description: Returns the list of clients for the filter dropdown. Cacheable with TTL of 1 hour.
-      responses:
-        '200':
-          description: Clients retrieved successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ClientsSuccessResponse'
-        '401':
-          description: Unauthorized - missing or invalid token
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UnauthorizedError'
-        '500':
-          description: Server error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CommonServerError'
-
-  /api/v1/statuses:
-    get:
-      tags:
-        - Filters
-      summary: Get statuses filter options
-      description: Returns the list of project statuses for the filter dropdown. Cacheable with TTL of 1 hour.
-      responses:
-        '200':
-          description: Statuses retrieved successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StatusesSuccessResponse'
-        '401':
-          description: Unauthorized - missing or invalid token
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UnauthorizedError'
-        '500':
-          description: Server error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CommonServerError'
-
-  /api/v1/report-frequencies:
-    get:
-      tags:
-        - Filters
-      summary: Get report frequency filter options
-      description: Returns the list of report frequency options for the filter dropdown. Cacheable with TTL of 1 hour.
-      responses:
-        '200':
-          description: Report frequencies retrieved successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ReportFrequenciesSuccessResponse'
+                $ref: '#/components/schemas/FiltersSuccessResponse'
         '401':
           description: Unauthorized - missing or invalid token
           content:
@@ -288,11 +211,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CommonServerError'
+
+  /api/v1/projects/action:
     post:
       tags:
         - Projects
       summary: Perform action on a project
       description: Performs an action on a project based on the action field. Supports "mark_not_applicable" (raises Jira ticket) and "mark_complete" (updates status to Completed).
+      operationId: performProjectAction
       requestBody:
         required: true
         content:
@@ -874,7 +800,7 @@ components:
     # ===========================
     # Filter Response Schemas
     # ===========================
-    SpecializationsSuccessResponse:
+    FiltersSuccessResponse:
       allOf:
         - $ref: '#/components/schemas/BaseResponse'
         - type: object
@@ -887,7 +813,7 @@ components:
               example: "success"
             message:
               type: string
-              example: "Specializations retrieved successfully"
+              example: "Filters retrieved successfully"
             data:
               type: object
               properties:
@@ -919,6 +845,58 @@ components:
                       name: "Site Reliability"
                     - id: "550e8400-e29b-41d4-a716-446655440007"
                       name: "Security Operations"
+                clients:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        description: Unique identifier for the client
+                        example: "660e8400-e29b-41d4-a716-446655440001"
+                      name:
+                        type: string
+                        description: Display name of the client
+                        example: "ABN AMRO"
+                  example:
+                    - id: "660e8400-e29b-41d4-a716-446655440001"
+                      name: "ABN AMRO"
+                    - id: "660e8400-e29b-41d4-a716-446655440002"
+                      name: "ANZ Bank"
+                    - id: "660e8400-e29b-41d4-a716-446655440003"
+                      name: "BNP Paribas"
+                    - id: "660e8400-e29b-41d4-a716-446655440004"
+                      name: "Barclays"
+                    - id: "660e8400-e29b-41d4-a716-446655440005"
+                      name: "Citibank"
+                    - id: "660e8400-e29b-41d4-a716-446655440006"
+                      name: "Commerzbank"
+                    - id: "660e8400-e29b-41d4-a716-446655440007"
+                      name: "Commonwealth Bank"
+                statuses:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        description: Unique identifier for the status
+                        example: "770e8400-e29b-41d4-a716-446655440001"
+                      name:
+                        type: string
+                        description: Display name of the status
+                        example: "Active"
+                  example:
+                    - id: "770e8400-e29b-41d4-a716-446655440001"
+                      name: "Active"
+                    - id: "770e8400-e29b-41d4-a716-446655440002"
+                      name: "Inactive"
+                    - id: "770e8400-e29b-41d4-a716-446655440003"
+                      name: "At Risk"
+                    - id: "770e8400-e29b-41d4-a716-446655440004"
+                      name: "Completed"
+                    - id: "770e8400-e29b-41d4-a716-446655440005"
+                      name: "Not Applicable"
 
     # ===========================
     # Projects Response Schemas
@@ -1086,142 +1064,6 @@ components:
               items:
                 type: object
               example: []
-
-    # ===========================
-    # Clients Filter Response
-    # ===========================
-    ClientsSuccessResponse:
-      allOf:
-        - $ref: '#/components/schemas/BaseResponse'
-        - type: object
-          properties:
-            status_code:
-              type: integer
-              example: 200
-            status:
-              type: string
-              example: "success"
-            message:
-              type: string
-              example: "Clients retrieved successfully"
-            data:
-              type: object
-              properties:
-                clients:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      id:
-                        type: string
-                        description: Unique identifier for the client
-                        example: "660e8400-e29b-41d4-a716-446655440001"
-                      name:
-                        type: string
-                        description: Display name of the client
-                        example: "ABN AMRO"
-                  example:
-                    - id: "660e8400-e29b-41d4-a716-446655440001"
-                      name: "ABN AMRO"
-                    - id: "660e8400-e29b-41d4-a716-446655440002"
-                      name: "ANZ Bank"
-                    - id: "660e8400-e29b-41d4-a716-446655440003"
-                      name: "BNP Paribas"
-                    - id: "660e8400-e29b-41d4-a716-446655440004"
-                      name: "Barclays"
-                    - id: "660e8400-e29b-41d4-a716-446655440005"
-                      name: "Citibank"
-                    - id: "660e8400-e29b-41d4-a716-446655440006"
-                      name: "Commerzbank"
-                    - id: "660e8400-e29b-41d4-a716-446655440007"
-                      name: "Commonwealth Bank"
-
-    # ===========================
-    # Report Frequencies Filter Response
-    # ===========================
-    ReportFrequenciesSuccessResponse:
-      allOf:
-        - $ref: '#/components/schemas/BaseResponse'
-        - type: object
-          properties:
-            status_code:
-              type: integer
-              example: 200
-            status:
-              type: string
-              example: "success"
-            message:
-              type: string
-              example: "Report frequencies retrieved successfully"
-            data:
-              type: object
-              properties:
-                report_frequencies:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      id:
-                        type: string
-                        format: uuid
-                        description: Unique identifier for the report frequency
-                        example: "990e8400-e29b-41d4-a716-446655440001"
-                      name:
-                        type: string
-                        description: Display name of the report frequency
-                        example: "Weekly"
-                  example:
-                    - id: "990e8400-e29b-41d4-a716-446655440001"
-                      name: "Daily"
-                    - id: "990e8400-e29b-41d4-a716-446655440002"
-                      name: "Weekly"
-                    - id: "990e8400-e29b-41d4-a716-446655440003"
-                      name: "Monthly"
-
-    # ===========================
-    # Statuses Filter Response
-    # ===========================
-    StatusesSuccessResponse:
-      allOf:
-        - $ref: '#/components/schemas/BaseResponse'
-        - type: object
-          properties:
-            status_code:
-              type: integer
-              example: 200
-            status:
-              type: string
-              example: "success"
-            message:
-              type: string
-              example: "Statuses retrieved successfully"
-            data:
-              type: object
-              properties:
-                statuses:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      id:
-                        type: string
-                        description: Unique identifier for the status
-                        example: "770e8400-e29b-41d4-a716-446655440001"
-                      name:
-                        type: string
-                        description: Display name of the status
-                        example: "Active"
-                  example:
-                    - id: "770e8400-e29b-41d4-a716-446655440001"
-                      name: "Active"
-                    - id: "770e8400-e29b-41d4-a716-446655440002"
-                      name: "Inactive"
-                    - id: "770e8400-e29b-41d4-a716-446655440003"
-                      name: "At Risk"
-                    - id: "770e8400-e29b-41d4-a716-446655440004"
-                      name: "Completed"
-                    - id: "770e8400-e29b-41d4-a716-446655440005"
-                      name: "Not Applicable"
 
     # ===========================
     # Repository Detail Schemas
