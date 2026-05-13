@@ -1432,7 +1432,6 @@ components:
         - project_name
         - onboarded_date
         - project_type
-        - created_by
       properties:
         sn_project_id:
           type: string
@@ -1451,31 +1450,26 @@ components:
           type: string
           description: Type/category of the project
           example: "Infrastructure"
+        is_applicable:
+          type: boolean
+          description: Whether the project is applicable for DevSecOps onboarding
+          default: true
+          example: true
         client:
           type: string
           description: Client name associated with the project
           example: "ABN AMRO"
-        ado_project_id:
+        approver:
           type: string
-          description: Azure DevOps project identifier
-          example: "ado-proj-00123"
-        created_by:
-          type: string
-          format: email
-          description: Email of the service account or user that created the sync request
-          example: "svc_jira.tools@zeb.co"
+          description: Name or email of the approver for the project
+          example: "barath.uthamasathish@zeb.co"
 
     # --- DevSecOps Tickets Sync from ServiceNow ---
     SyncDevSecOpsTicketsRequest:
       type: object
       required:
-        - sn_request_id
         - tickets
       properties:
-        sn_request_id:
-          type: string
-          description: ServiceNow request identifier for traceability
-          example: "SN-REQ-042"
         tickets:
           type: array
           description: List of DevSecOps tickets to sync from ServiceNow
@@ -1511,24 +1505,23 @@ components:
           items:
             type: object
             required:
-              - repo_id
               - repo_name
             properties:
-              repo_id:
-                type: string
-                description: Repository identifier
-                example: "repo-001"
               repo_name:
                 type: string
                 description: Repository name
                 example: "payments-api"
+              ado_repo_id:
+                type: string
+                description: Azure DevOps repository identifier
+                example: "ado-repo-001"
         requested_by:
           type: string
           description: Name or email of the person who raised the request
           example: "tom.walsh@zeb.co"
-        assigned_to:
+        approver:
           type: string
-          description: Name or email of the person assigned to the ticket
+          description: Name or email of the approver for the ticket
           example: "barath.uthamasathish@zeb.co"
         requested_at:
           type: string
@@ -1617,11 +1610,6 @@ components:
         at_risk_alert:
           type: boolean
           example: true
-        report_frequency_id:
-          type: string
-          format: uuid
-          description: UUID of the report frequency (references report_frequencies table)
-          example: "990e8400-e29b-41d4-a716-446655440002"
         report_frequency:
           type: string
           enum: [daily, weekly, monthly]
@@ -1668,12 +1656,12 @@ components:
           nullable: true
           description: Enable/disable at-risk project alerts
           example: true
-        report_frequency_id:
+        report_frequency:
           type: string
-          format: uuid
+          enum: [daily, weekly, monthly]
           nullable: true
-          description: UUID of the report frequency (from GET /api/v1/report-frequencies)
-          example: "990e8400-e29b-41d4-a716-446655440002"
+          description: Report frequency value to set
+          example: "weekly"
         email_recipients:
           type: array
           nullable: true

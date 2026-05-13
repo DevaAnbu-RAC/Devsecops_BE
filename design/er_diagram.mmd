@@ -32,7 +32,6 @@ erDiagram
         VARCHAR project_type "NOT NULL"
         BOOLEAN is_applicable "DEFAULT TRUE"
         VARCHAR client
-        VARCHAR ado_project_id
         DATETIME completed_at
         DATETIME created_at
         VARCHAR created_by
@@ -65,6 +64,7 @@ erDiagram
         VARCHAR client
         VARCHAR requested_by
         VARCHAR approver
+        VARCHAR sync_method
         DATETIME requested_at
         DATETIME created_at
         VARCHAR created_by
