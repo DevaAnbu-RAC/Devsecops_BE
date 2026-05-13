@@ -1,0 +1,284 @@
+erDiagram
+    %% DevSecOps Jira Dashboard - ER Diagram
+    %% Pipeline/Commits/PRs/Scans/Artifacts fetched from Azure DevOps
+    %% Project onboarding fetched from ServiceNow
+
+    specializations {
+        UUID specialization_id PK
+        VARCHAR specialization_name "NOT NULL"
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    statuses {
+        UUID status_id PK
+        VARCHAR status_name "NOT NULL"
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    projects {
+        UUID project_id PK
+        UUID status_id FK
+        VARCHAR sn_project_id "ServiceNow project identifier"
+        VARCHAR project_name "NOT NULL"
+        DATE onboarded_date "NOT NULL"
+        VARCHAR project_type "NOT NULL"
+        BOOLEAN is_applicable "DEFAULT TRUE"
+        VARCHAR client
+        VARCHAR ado_project_id
+        DATETIME completed_at
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    repositories {
+        UUID repository_id PK
+        UUID ticket_id FK
+        VARCHAR repository_name "NOT NULL"
+        VARCHAR ado_repo_id
+        INTEGER pipeline_runs_count "DEFAULT 0"
+        FLOAT success_rate "DEFAULT 0"
+        DATETIME last_run_at
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    devsecops_tickets {
+        UUID ticket_id PK
+        UUID specialization_id FK
+        UUID project_id "NULLABLE"
+        VARCHAR sn_project_id FK "References projects.sn_project_id"
+        VARCHAR project_name "NOT NULL"
+        VARCHAR client
+        VARCHAR requested_by
+        VARCHAR approver
+        DATETIME requested_at
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    settings {
+        UUID setting_id PK
+        UUID specialization_id FK
+        INTEGER at_risk_threshold "NOT NULL"
+        VARCHAR email_digest
+        VARCHAR at_risk_alert
+        DATETIME last_synced
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    email_recipient {
+        UUID email_recipient_id PK
+        UUID setting_id FK
+        UUID specialization_id FK
+        VARCHAR alert_recipient "NOT NULL"
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    error_log {
+        UUID error_id PK
+        TEXT error_message "NOT NULL"
+        TEXT error_function "NOT NULL"
+        TEXT error_file "NOT NULL"
+        TEXT stack_trace
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    jira_tickets {
+        UUID jira_ticket_id PK
+        UUID project_id FK
+        VARCHAR jira_id "NOT NULL"
+        VARCHAR type "NOT NULL"
+        VARCHAR assignee "NOT NULL"
+        VARCHAR priority "NOT NULL"
+        VARCHAR status "NOT NULL"
+        VARCHAR reason_category "NOT NULL"
+        TEXT comments "NOT NULL"
+        TEXT evidence_url
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    pipeline_runs {
+        UUID pipeline_run_id PK
+        UUID repository_id FK
+        INTEGER run_number "NOT NULL"
+        VARCHAR status "NOT NULL"
+        VARCHAR branch "NOT NULL"
+        INTEGER duration_seconds
+        DATETIME triggered_at "NOT NULL"
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    commits {
+        UUID commit_id PK
+        UUID repository_id FK
+        VARCHAR hash "NOT NULL"
+        TEXT message "NOT NULL"
+        VARCHAR author "NOT NULL"
+        DATETIME committed_at "NOT NULL"
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    pull_requests {
+        UUID pull_request_id PK
+        UUID repository_id FK
+        VARCHAR title "NOT NULL"
+        VARCHAR author "NOT NULL"
+        VARCHAR status "NOT NULL"
+        DATETIME updated_at
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    security_scans {
+        UUID security_scan_id PK
+        UUID repository_id FK
+        VARCHAR scan_type "NOT NULL"
+        INTEGER findings_count "DEFAULT 0"
+        VARCHAR description
+        DATETIME scanned_at "NOT NULL"
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    artifacts {
+        UUID artifact_id PK
+        UUID pipeline_run_id FK
+        VARCHAR artifact_name "NOT NULL"
+        BIGINT size_bytes "NOT NULL"
+        TEXT url "NOT NULL"
+        DATETIME uploaded_at "NOT NULL"
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    cron_jobs {
+        UUID cron_id PK
+        VARCHAR specialization_id "NOT NULL"
+        VARCHAR type "NOT NULL, ENUM(azure, email)"
+        VARCHAR sync_status "NOT NULL, ENUM(pending, success, fail)"
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    kpi_history {
+        UUID kpi_history_id PK
+        UUID specialization_id FK
+        INTEGER projects_count "DEFAULT 0"
+        INTEGER projects_increase_count "DEFAULT 0"
+        INTEGER projects_decrease_count "DEFAULT 0"
+        INTEGER completed_count "DEFAULT 0"
+        INTEGER completed_increase_count "DEFAULT 0"
+        INTEGER completed_decrease_count "DEFAULT 0"
+        INTEGER inactive_count "DEFAULT 0"
+        INTEGER inactive_increase_count "DEFAULT 0"
+        INTEGER inactive_decrease_count "DEFAULT 0"
+        INTEGER at_risk_count "DEFAULT 0"
+        INTEGER at_risk_increase_count "DEFAULT 0"
+        INTEGER at_risk_decrease_count "DEFAULT 0"
+        INTEGER not_applicable_count "DEFAULT 0"
+        INTEGER not_applicable_increase_count "DEFAULT 0"
+        INTEGER not_applicable_decrease_count "DEFAULT 0"
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    email_history {
+        UUID email_history_id PK
+        UUID setting_id FK
+        VARCHAR report_frequency "NOT NULL"
+        VARCHAR email_status "NOT NULL"
+        VARCHAR email_type "NOT NULL"
+        TEXT report_url
+        DATETIME last_synced
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+
+    email_templates {
+        UUID email_template_id PK
+        VARCHAR template_name "NOT NULL"
+        TEXT template_content "NOT NULL"
+        DATETIME created_at
+        VARCHAR created_by
+        DATETIME modified_at
+        VARCHAR modified_by
+        INT is_active "DEFAULT 1"
+    }
+
+    %% Relationships
+    statuses ||--o{ projects : "has"
+
+    projects ||--o{ devsecops_tickets : "has"
+    specializations ||--o{ devsecops_tickets : "has"
+    devsecops_tickets ||--o{ repositories : "has"
+    projects ||--o{ jira_tickets : "has"
+    specializations ||--o{ settings : "configures"
+    specializations ||--o{ email_recipient : "has"
+    settings ||--o{ email_history : "sends"
+    specializations ||--o{ kpi_history : "tracks"
+    repositories ||--o{ pipeline_runs : "has"
+    repositories ||--o{ commits : "has"
+    repositories ||--o{ pull_requests : "has"
+    repositories ||--o{ security_scans : "has"
+    pipeline_runs ||--o{ artifacts : "produces"
+ 
