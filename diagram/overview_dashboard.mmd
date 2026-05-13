@@ -1,0 +1,100 @@
+sequenceDiagram
+    autonumber
+    title ZDAD-34: Overview Dashboard API Flow
+
+    participant Client as Dashboard Client
+    participant API as GET /api/v1/overview
+    participant Auth as JWT Middleware
+    participant Validation as Query Parameter Validation
+    participant Service as Overview Service
+    participant DB as PostgreSQL Database
+    participant ErrorLog as Error Log Handler
+
+    %% Authentication
+    Client->>API: GET /api/v1/overview?period=last_month&specialization=devsecops
+    API->>Auth: Validate JWT Bearer Token
+    alt Token missing or invalid
+        Auth-->>API: 401 Unauthorized
+        API-->>Client: 401 - Authentication token is missing or expired
+    else Token valid
+        Auth-->>API: Token Valid (claims attached to context)
+    end
+
+    %% Query Parameter Validation (FR04)
+    rect rgb(240, 248, 255)
+        Note over API,Validation: Query Parameter Validation (FR04)
+        API->>Validation: Validate period & specialization params
+        alt Invalid period value
+            Validation-->>API: Validation Error
+            API-->>Client: 400 - Invalid query parameter: 'period'<br/>must be one of [last_week, last_month, ...]
+        else Valid parameters
+            Validation-->>API: Parameters OK
+        end
+    end
+
+    %% KPI Tiles Retrieval (FR01)
+    rect rgb(240, 255, 240)
+        Note over Service,DB: KPI Tiles Retrieval (FR01)
+        API->>Service: Get overview data (period, specialization)
+        Service->>DB: SELECT kpi_history<br/>JOIN specializations<br/>WHERE specialization_id IN (filter)<br/>AND is_active = 1
+        DB-->>Service: KPI data (projects_count, completed_count,<br/>inactive_count, at_risk_count,<br/>increase/decrease counts)
+        Service->>Service: Calculate KPI tiles:<br/>• Total Projects (count + trend)<br/>• Adopted (completed_count + trend)<br/>• Adoption Rate (completed/total * 100)<br/>• At Risk (at_risk_count + trend)<br/>• Active (active_count + trend)<br/>• Inactive (inactive_count + trend)
+    end
+
+    %% Status Distribution (FR01)
+    rect rgb(255, 248, 240)
+        Note over Service,DB: Status Distribution (FR01)
+        Service->>DB: SELECT statuses.status_name,<br/>COUNT(projects.project_id)<br/>FROM projects JOIN statuses<br/>WHERE projects.is_active = 1<br/>GROUP BY statuses.status_name
+        DB-->>Service: Status counts per group
+        Service->>Service: Calculate percentages<br/>(count / total * 100)
+    end
+
+    %% Attention Banner (FR03)
+    rect rgb(255, 255, 240)
+        Note over Service,DB: Attention Banner (FR03)
+        Service->>DB: SELECT COUNT(*) FROM projects<br/>JOIN statuses WHERE status_name = 'At Risk'<br/>AND is_active = 1
+        DB-->>Service: at_risk_count
+        Service->>DB: SELECT at_risk_threshold FROM settings<br/>WHERE specialization_id matches
+        DB-->>Service: threshold value
+        Service->>Service: Determine severity:<br/>• critical (>5 at-risk)<br/>• warning (1-5 at-risk)<br/>• info (0 at-risk)<br/>Compose banner message
+    end
+
+    %% Most Overdue Projects (FR03)
+    rect rgb(248, 240, 255)
+        Note over Service,DB: Most Overdue Projects (FR03)
+        Service->>DB: SELECT projects.*, statuses.status_name,<br/>specializations.specialization_name<br/>FROM projects JOIN statuses JOIN devsecops_tickets<br/>JOIN specializations<br/>WHERE status_name = 'At Risk'<br/>ORDER BY daysOverdue DESC LIMIT 5
+        DB-->>Service: Top 5 overdue projects<br/>(projectName, client, onboardedDate,<br/>daysOverdue, specialization)
+    end
+
+    %% Success Response
+    Service-->>API: {metrics, statusDistribution,<br/>attentionBanner, mostOverdueProjects}
+    API-->>Client: 200 OK - Complete overview response
+
+    %% Error Handling (FR05)
+    rect rgb(255, 235, 235)
+        Note over Service,ErrorLog: Error Handling (FR05)
+        Note right of Service: On unhandled exception at any step:
+        Service->>ErrorLog: INSERT error_log<br/>(error_message, error_function,<br/>error_file, stack_trace,<br/>created_by="overview_service")
+        Service-->>API: 500 - An unexpected error occurred
+        API-->>Client: 500 Internal Server Error
+    end
+
+    %% === Specializations Endpoint ===
+    Note over Client,DB: --- Specializations Endpoint (FR02) ---
+
+    participant SpecAPI as GET /api/v1/specializations
+    participant SpecService as Specializations Service
+
+    Client->>SpecAPI: GET /api/v1/specializations
+    SpecAPI->>Auth: Validate JWT Bearer Token
+    Auth-->>SpecAPI: Token Valid
+
+    rect rgb(248, 248, 255)
+        Note over SpecService,DB: Specializations Filter (FR02)
+        SpecAPI->>SpecService: Get specialization options
+        SpecService->>DB: SELECT specialization_id, specialization_name<br/>FROM specializations WHERE is_active = 1
+        DB-->>SpecService: Specializations list [{id, name}]
+    end
+
+    SpecService-->>SpecAPI: {specializations: [{id, name}, ...]}
+    SpecAPI-->>Client: 200 OK (cacheable TTL=1h)

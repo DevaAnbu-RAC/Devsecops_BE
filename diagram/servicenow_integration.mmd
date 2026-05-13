@@ -1,0 +1,152 @@
+sequenceDiagram
+    autonumber
+    title ZDAD-58: ServiceNow Integration - Project & Ticket Sync Flow
+
+    participant SN as ServiceNow Script
+    participant API as Sync API Endpoints
+    participant Auth as JWT Middleware
+    participant RoleCheck as Role Authorization
+    participant Validation as Pydantic Validation
+    participant Service as Sync Service
+    participant DB as PostgreSQL Database
+    participant ErrorLog as Error Log Handler
+
+    %% === Project Sync Flow ===
+    Note over SN,DB: --- Project Sync: POST /api/v1/sync/servicenow/projects (FR01) ---
+
+    %% Authentication & Authorization
+    SN->>API: POST /api/v1/sync/servicenow/projects<br/>{sn_project_id, project_name, onboarded_date, ...}
+    API->>Auth: Validate JWT Bearer Token
+    alt Token missing or invalid
+        Auth-->>API: 401 Unauthorized
+        API-->>SN: 401 - Authentication token is missing or expired
+    else Token valid
+        Auth-->>API: Token Valid
+    end
+
+    %% Role-Based Authorization (FR03)
+    rect rgb(255, 248, 240)
+        Note over API,RoleCheck: Role Authorization (FR03)
+        API->>RoleCheck: Check for 'servicenow_sync' role in JWT claims
+        alt Role not present
+            RoleCheck-->>API: Insufficient permissions
+            API-->>SN: 401 - Insufficient permissions: servicenow_sync role required
+        else Role present
+            RoleCheck-->>API: Authorized
+        end
+    end
+
+    %% Payload Validation (FR04)
+    rect rgb(240, 248, 255)
+        Note over API,Validation: Request Validation (FR04)
+        API->>Validation: Validate payload (Pydantic v2 schema)
+        alt Validation fails
+            Validation-->>API: Validation Error
+            API-->>SN: 400 - Validation error: '{field}' is required
+        else Validation passes
+            Validation-->>API: Payload OK
+        end
+    end
+
+    %% Processing Logic
+    rect rgb(240, 255, 240)
+        Note over Service,DB: Project Upsert Logic (FR01)
+        API->>Service: Process project sync
+        Service->>DB: SELECT * FROM projects<br/>WHERE sn_project_id = '{sn_project_id}'
+        alt Project found (UPDATE)
+            DB-->>Service: Existing project record
+            Service->>DB: UPDATE projects SET<br/>project_name, onboarded_date, project_type,<br/>is_applicable, client, approver,<br/>modified_at = NOW(), modified_by = svc_account
+            DB-->>Service: Updated
+        else Project not found (INSERT)
+            DB-->>Service: No record
+            Service->>DB: SELECT status_id FROM statuses<br/>WHERE status_name = 'Inactive'
+            DB-->>Service: status_id (Inactive)
+            Service->>DB: INSERT INTO projects<br/>(project_id=UUID, sn_project_id, project_name,<br/>onboarded_date, project_type, status_id,<br/>is_active=1, created_at=NOW(), created_by=svc_account)
+            DB-->>Service: Inserted
+        end
+    end
+
+    Service-->>API: Success
+    API-->>SN: 200 - Sync completed successfully
+
+    %% === DevSecOps Tickets Sync Flow ===
+    Note over SN,DB: --- Tickets Sync: POST /api/v1/sync/servicenow/devsecops-tickets (FR02) ---
+
+    SN->>API: POST /api/v1/sync/servicenow/devsecops-tickets<br/>{tickets: [{sn_project_id, specialization_name, repositories, ...}]}
+    API->>Auth: Validate JWT Bearer Token
+    Auth-->>API: Token Valid
+    API->>RoleCheck: Check 'servicenow_sync' role
+    RoleCheck-->>API: Authorized
+
+    %% Payload Validation
+    API->>Validation: Validate tickets array (Pydantic v2)
+    alt Empty or missing tickets array
+        Validation-->>API: Validation Error
+        API-->>SN: 400 - Validation error: 'tickets' must be a non-empty array
+    else Valid structure
+        Validation-->>API: Payload OK
+    end
+
+    %% Batch Processing
+    rect rgb(248, 240, 255)
+        Note over Service,DB: Batch Ticket Processing (FR02)
+        API->>Service: Process tickets batch
+
+        loop For each ticket in tickets[]
+            %% Resolve Specialization
+            Service->>DB: SELECT specialization_id FROM specializations<br/>WHERE specialization_name = '{name}'<br/>AND is_active = 1
+            alt Specialization not found
+                DB-->>Service: No record
+                Service->>Service: Log WARNING: skip ticket<br/>(unknown specialization)
+            else Specialization found
+                DB-->>Service: specialization_id
+
+                %% Resolve Project
+                Service->>DB: SELECT project_id FROM projects<br/>WHERE sn_project_id = '{sn_project_id}'<br/>AND is_active = 1
+                alt Project not found
+                    DB-->>Service: No record
+                    Service->>Service: Log WARNING: skip ticket<br/>(project not found)
+                else Project found
+                    DB-->>Service: project_id
+
+                    %% Upsert Ticket
+                    rect rgb(240, 255, 240)
+                        Service->>DB: SELECT ticket_id FROM devsecops_tickets<br/>WHERE sn_project_id = '{sn_project_id}'<br/>AND specialization_id = '{spec_id}'
+                        alt Ticket exists (UPDATE)
+                            DB-->>Service: Existing ticket
+                            Service->>DB: UPDATE devsecops_tickets SET<br/>project_name, client, requested_by,<br/>approver, modified_at, modified_by
+                        else Ticket not found (INSERT)
+                            DB-->>Service: No record
+                            Service->>DB: INSERT INTO devsecops_tickets<br/>(ticket_id=UUID, specialization_id, project_id,<br/>sn_project_id, project_name, is_active=1,<br/>created_at, created_by)
+                        end
+                    end
+
+                    %% Process Repositories
+                    rect rgb(255, 255, 240)
+                        loop For each repository in ticket.repositories[]
+                            Service->>DB: SELECT repository_id FROM repositories<br/>WHERE repository_name = '{repo_name}'<br/>AND ticket_id = '{ticket_id}'
+                            alt Repository exists (UPDATE)
+                                DB-->>Service: Existing repo
+                                Service->>DB: UPDATE repositories SET<br/>ado_repo_id, modified_at, modified_by
+                            else Repository not found (INSERT)
+                                DB-->>Service: No record
+                                Service->>DB: INSERT INTO repositories<br/>(repository_id=UUID, ticket_id, repository_name,<br/>ado_repo_id, is_active=1, created_at, created_by)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    Service-->>API: Batch processing complete
+    API-->>SN: 200 - Sync completed successfully
+
+    %% Error Handling (FR05)
+    rect rgb(255, 235, 235)
+        Note over Service,ErrorLog: Error Handling (FR05)
+        Note right of Service: On unhandled exception at any step:
+        Service->>ErrorLog: INSERT error_log<br/>(error_message, error_function,<br/>error_file, stack_trace,<br/>created_by="servicenow_sync_service")
+        Service-->>API: 500 - An unexpected error occurred
+        API-->>SN: 500 Internal Server Error
+    end
