@@ -2,7 +2,7 @@
 
 ### <u>Project Details</u>
 - **Project ID:** ZDAD  
-- **Project Name:** DevSecOps Jira Dashboard  
+- **Project Name:** DevSecOps Jira Dashboard.
 
 ### <u>Story Details</u>
 - **Story ID:** ZDAD-48  
